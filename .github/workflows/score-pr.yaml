@@ -1,0 +1,152 @@
+name: Score PR - Java
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - main
+      - participant-start
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout original repo
+        uses: actions/checkout@v4
+        with:
+          path: original
+
+      - name: Parse baseline from SCAN-RESULTS.md
+        id: baseline
+        run: |
+          cd original
+          baseline=$(python3 scripts/parse-baseline.py SCAN-RESULTS.md)
+          echo "count=$baseline" >> $GITHUB_OUTPUT
+          echo "📊 Baseline: $baseline vulnerabilities"
+
+      - name: Checkout PR fork
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+          path: fork
+
+      - name: Download OWASP Dependency-Check (latest)
+        run: |
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/jeremylong/DependencyCheck/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          echo "Downloading Dependency-Check v${LATEST_VERSION}"
+          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${LATEST_VERSION}/dependency-check-${LATEST_VERSION}-release.zip
+          unzip -q dependency-check-${LATEST_VERSION}-release.zip
+          rm dependency-check-${LATEST_VERSION}-release.zip
+
+      - name: Cache NVD Database
+        uses: actions/cache@v4
+        with:
+          path: ~/.dependency-check
+          key: nvd-data-${{ runner.os }}
+          restore-keys: |
+            nvd-data-${{ runner.os }}
+
+      - name: Run Dependency-Check on fork
+        run: |
+          ./dependency-check/bin/dependency-check.sh \
+            --project "verademo-java-fork" \
+            --scan fork/app \
+            --out fork-report \
+            --format JSON \
+            --failOnCVSS 7 || true
+
+      - name: Parse current vulnerabilities
+        id: current
+        run: |
+          python3 << 'EOF'
+          import json
+
+          try:
+              with open('fork-report/dependency-check-report.json', 'r') as f:
+                  report = json.load(f)
+          except:
+              print("count=0")
+              with open('$GITHUB_OUTPUT', 'a') as f:
+                  f.write("count=0\n")
+              exit()
+
+          dependencies = report.get('reportSchema', {}).get('dependencies', [])
+
+          critical = 0
+          high = 0
+
+          for dep in dependencies:
+              vulns = dep.get('vulnerabilities', [])
+              for vuln in vulns:
+                  severity = vuln.get('severity', '')
+                  if severity == 'CRITICAL':
+                      critical += 1
+                  elif severity == 'HIGH':
+                      high += 1
+
+          current_count = critical + high
+
+          with open('$GITHUB_OUTPUT', 'a') as f:
+              f.write(f"count={current_count}\n")
+          EOF
+
+      - name: Calculate score
+        id: score
+        run: |
+          baseline=${{ steps.baseline.outputs.count }}
+          current=${{ steps.current.outputs.count }}
+          score=$((baseline - current))
+          echo "score=$score" >> $GITHUB_OUTPUT
+          echo "📈 Score: $score vulnerabilities fixed"
+
+      - name: Get current timestamp
+        id: timestamp
+        run: |
+          ts=$(date -u +'%Y-%m-%dT%H:%M:%S.%N' | sed 's/[0-9]\{6\}Z$/Z/')Z
+          echo "ts=$ts" >> $GITHUB_OUTPUT
+
+      - name: Push to leaderboard
+        run: |
+          cd original
+          python3 scripts/score-and-leaderboard.py \
+            --repo-name verademo-java \
+            --username ${{ github.event.pull_request.user.login }} \
+            --baseline-count ${{ steps.baseline.outputs.count }} \
+            --current-count ${{ steps.current.outputs.count }} \
+            --timestamp "${{ steps.timestamp.outputs.ts }}" \
+            --leaderboard-repo veracode-wad26/leaderboard \
+            --github-token ${{ secrets.LEADERBOARD_TOKEN }}
+        env:
+          LEADERBOARD_TOKEN: ${{ secrets.LEADERBOARD_TOKEN }}
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const baseline = ${{ steps.baseline.outputs.count }};
+            const current = ${{ steps.current.outputs.count }};
+            const score = ${{ steps.score.outputs.score }};
+            const timestamp = "${{ steps.timestamp.outputs.ts }}";
+
+            let status = '❌';
+            if (current === 0) status = '✅';
+            else if (score > 0) status = '🟡';
+
+            const body = `${status} **Scoring Update**
+
+| Metric | Value |
+|--------|-------|
+| Baseline | ${baseline} vulnerabilities |
+| Current | ${current} vulnerabilities |
+| Fixed | ${score} vulnerabilities |
+| Timestamp | ${timestamp} |
+
+Run \`mvn dependency-check:check -DfailBuildOnCVSS=7\` locally to see details.`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
