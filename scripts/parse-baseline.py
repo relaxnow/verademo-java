@@ -32,20 +32,22 @@ def parse_java_baseline(file_path):
 
     lines = content.split('\n')
     for line in lines:
+        line_lower = line.lower()
+
         # Look for "Found X issues of Very High severity" or "Found X issues of High severity"
-        match = re.search(r'Found (\d+) issues? of (?:Very )?High severity', line, re.IGNORECASE)
+        match = re.search(r'found (\d+) issues? of (?:very )?high severity', line_lower, re.IGNORECASE)
         if match:
             count = int(match.group(1))
-            if 'very high' in line.lower():
+            if 'very high' in line_lower:
                 critical_count += count
             else:
                 high_count += count
 
         # Alternative: count individual vulnerability lines
         # "CWE-78: ... (CRITICAL)" or "(HIGH)"
-        if re.search(r'\(CRITICAL\)', line):
+        if '(critical)' in line_lower:
             critical_count += 1
-        elif re.search(r'\(HIGH\)', line):
+        elif '(high)' in line_lower:
             high_count += 1
 
     total = critical_count + high_count
