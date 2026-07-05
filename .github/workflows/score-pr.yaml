@@ -94,14 +94,31 @@ jobs:
                   f.write("count=0\n")
               exit()
 
-          dependencies = report.get('reportSchema', {}).get('dependencies', [])
+          # Handle different dependency-check JSON structures
+          if isinstance(report, dict):
+              # Try reportSchema first
+              if 'reportSchema' in report and isinstance(report['reportSchema'], dict):
+                  dependencies = report['reportSchema'].get('dependencies', [])
+              # If not, try top-level dependencies
+              elif 'dependencies' in report:
+                  dependencies = report['dependencies']
+              else:
+                  print(f"Debug: report keys = {list(report.keys())}")
+                  dependencies = []
+          else:
+              print(f"Error: report is not a dict, it's {type(report)}")
+              dependencies = []
 
           critical = 0
           high = 0
 
           for dep in dependencies:
+              if not isinstance(dep, dict):
+                  continue
               vulns = dep.get('vulnerabilities', [])
               for vuln in vulns:
+                  if not isinstance(vuln, dict):
+                      continue
                   severity = vuln.get('severity', '')
                   if severity == 'CRITICAL':
                       critical += 1
