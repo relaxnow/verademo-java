@@ -61,10 +61,10 @@ jobs:
       - name: Cache NVD Database
         uses: actions/cache@v4
         with:
-          path: ~/.dependency-check
-          key: nvd-data-${{ runner.os }}
+          path: ~/.dependency-check/data
+          key: nvd-data-${{ runner.os }}-${{ hashFiles('**/pom.xml') }}
           restore-keys: |
-            nvd-data-${{ runner.os }}
+            nvd-data-${{ runner.os }}-
 
       - name: Run Dependency-Check on fork
         env:
