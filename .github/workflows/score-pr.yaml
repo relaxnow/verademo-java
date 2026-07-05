@@ -50,6 +50,17 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           path: fork
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Resolve Maven dependencies
+        run: |
+          cd fork
+          mvn dependency:resolve -DskipTests || true
+
       - name: Download OWASP Dependency-Check (latest)
         run: |
           LATEST_VERSION=$(curl -s https://api.github.com/repos/jeremylong/DependencyCheck/releases/latest | jq -r '.tag_name' | sed 's/^v//')
@@ -73,10 +84,20 @@ jobs:
           ./dependency-check/bin/dependency-check.sh \
             --project "verademo-java-fork" \
             --scan fork/app \
+            --scan ~/.m2/repository \
             --out fork-report \
             --format JSON \
             --failOnCVSS 7 \
-            --nvdApiKey "$NVD_API_KEY" || true
+            --nvdApiKey "$NVD_API_KEY" \
+            --disableOssIndex || true
+
+      - name: Upload dependency-check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: fork-report/dependency-check-report.json
+          retention-days: 30
 
       - name: Parse current vulnerabilities
         id: current
@@ -109,8 +130,7 @@ jobs:
               print(f"Error: report is not a dict, it's {type(report)}")
               dependencies = []
 
-          critical = 0
-          high = 0
+          count = 0
 
           for dep in dependencies:
               if not isinstance(dep, dict):
@@ -119,18 +139,17 @@ jobs:
               for vuln in vulns:
                   if not isinstance(vuln, dict):
                       continue
-                  severity = vuln.get('severity', '')
-                  if severity == 'CRITICAL':
-                      critical += 1
-                  elif severity == 'HIGH':
-                      high += 1
-
-          current_count = critical + high
+                  # Count vulnerabilities with CVSS v3 score >= 7.0
+                  cvssv3 = vuln.get('cvssv3', {})
+                  if isinstance(cvssv3, dict):
+                      score = cvssv3.get('baseScore')
+                      if score is not None and float(score) >= 7.0:
+                          count += 1
 
           import os
           with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"count={current_count}\n")
-          print(f"Current: {current_count} vulnerabilities")
+              f.write(f"count={count}\n")
+          print(f"Current: {count} vulnerabilities (CVSS >= 7.0)")
           EOF
 
       - name: Calculate score
