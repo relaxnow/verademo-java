@@ -51,14 +51,13 @@ jobs:
           TAG="nvd-cache-${DATE}"
 
           # Delete old release if exists
-          gh release delete "$TAG" --yes || true
+          gh release delete "$TAG" --yes 2>/dev/null || true
+
+          # Create tarball (outside the data directory to avoid self-inclusion)
+          tar czf /tmp/nvd-database.tar.gz -C ~/.dependency-check data
 
           # Create new release with NVD database
-          cd ~/.dependency-check/data
-          tar czf nvd-database.tar.gz .
-          cd $GITHUB_WORKSPACE
-
           gh release create "$TAG" \
-            ~/.dependency-check/data/nvd-database.tar.gz \
+            /tmp/nvd-database.tar.gz \
             --title "NVD Database Cache - ${DATE}" \
             --notes "Pre-built NVD database snapshot for fast PR scanning"

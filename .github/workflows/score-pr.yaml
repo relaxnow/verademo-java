@@ -76,7 +76,7 @@ jobs:
           echo "No cached NVD database found, will download fresh"
 
           if [ -f /tmp/nvd.tar.gz ]; then
-            tar xzf /tmp/nvd.tar.gz -C ~/.dependency-check/data
+            tar xzf /tmp/nvd.tar.gz -C ~/.dependency-check
             echo "✅ Restored NVD database from cache"
           fi
 
