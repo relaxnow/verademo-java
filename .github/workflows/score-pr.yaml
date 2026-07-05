@@ -58,8 +58,7 @@ jobs:
 
       - name: Resolve Maven dependencies
         run: |
-          cd fork
-          mvn dependency:resolve -DskipTests || true
+          mvn -f fork/app/pom.xml dependency:resolve -DskipTests || true
 
       - name: Download OWASP Dependency-Check (latest)
         run: |
