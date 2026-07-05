@@ -67,13 +67,16 @@ jobs:
             nvd-data-${{ runner.os }}
 
       - name: Run Dependency-Check on fork
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           ./dependency-check/bin/dependency-check.sh \
             --project "verademo-java-fork" \
             --scan fork/app \
             --out fork-report \
             --format JSON \
-            --failOnCVSS 7 || true
+            --failOnCVSS 7 \
+            --nvdApiKey "$NVD_API_KEY" || true
 
       - name: Parse current vulnerabilities
         id: current
