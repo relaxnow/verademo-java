@@ -1,3 +1,11 @@
+# Baseline Vulnerability Scan Results
+
+Generated: 2026-07-05
+Scanner: OWASP Dependency-Check v12.1.0
+Total Vulnerabilities (CVSS >= 7.0): 150
+
+---
+
 [INFO] Scanning for projects...
 [INFO] 
 [INFO] -----------------------< com.veracode:verademo >------------------------

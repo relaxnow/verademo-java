@@ -23,11 +23,16 @@ def parse_java_baseline(file_path):
         print(f"❌ Could not find {file_path}", file=sys.stderr)
         sys.exit(1)
 
-    count = 0
+    # First, try to extract from the header: "Total Vulnerabilities (CVSS >= 7.0): 150"
+    header_pattern = re.compile(r'Total Vulnerabilities \(CVSS >= 7\.0\):\s*(\d+)')
+    match = header_pattern.search(content)
+    if match:
+        return int(match.group(1))
 
-    # Parse dependency-check format with CVSS scores:
+    # Fallback: Parse dependency-check format with CVSS scores:
     # CVE-2015-6420(9.8), CVE-2016-1000031(9.8), CVE-2025-48976(7.5)
     # Count CVEs with CVSS >= 7.0
+    count = 0
     cve_pattern = re.compile(r'CVE-\d+-\d+\((\d+\.?\d*)\)')
 
     for match in cve_pattern.finditer(content):
