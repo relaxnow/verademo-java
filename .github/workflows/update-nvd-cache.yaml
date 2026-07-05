@@ -1,0 +1,64 @@
+name: Update NVD Database Cache
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-cache:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
+      - name: Download Dependency-Check
+        run: |
+          LATEST_VERSION=$(curl -s https://api.github.com/repos/jeremylong/DependencyCheck/releases/latest | jq -r '.tag_name' | sed 's/^v//')
+          echo "Downloading Dependency-Check v${LATEST_VERSION}"
+          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${LATEST_VERSION}/dependency-check-${LATEST_VERSION}-release.zip
+          unzip -q dependency-check-${LATEST_VERSION}-release.zip
+          rm dependency-check-${LATEST_VERSION}-release.zip
+
+      - name: Download NVD Database
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          mkdir -p ~/.dependency-check/data
+          ./dependency-check/bin/dependency-check.sh \
+            --project "nvd-update" \
+            --scan . \
+            --out /tmp/dummy-report \
+            --format JSON \
+            --data ~/.dependency-check/data \
+            --nvdApiKey "$NVD_API_KEY" \
+            --disableOssIndex || true
+
+      - name: Create Release and Upload NVD Database
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          DATE=$(date -u +'%Y-%m-%d')
+          TAG="nvd-cache-${DATE}"
+
+          # Delete old release if exists
+          gh release delete "$TAG" --yes || true
+
+          # Create new release with NVD database
+          cd ~/.dependency-check/data
+          tar czf nvd-database.tar.gz .
+          cd $GITHUB_WORKSPACE
+
+          gh release create "$TAG" \
+            ~/.dependency-check/data/nvd-database.tar.gz \
+            --title "NVD Database Cache - ${DATE}" \
+            --notes "Pre-built NVD database snapshot for fast PR scanning"

@@ -61,6 +61,25 @@ jobs:
         run: |
           mvn -f fork/app/pom.xml dependency:resolve -DskipTests -q -DdisableTransferProgress=true || true
 
+      - name: Download cached NVD Database from Release
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ~/.dependency-check/data
+          DATE=$(date -u +'%Y-%m-%d')
+          TAG="nvd-cache-${DATE}"
+
+          # Try to download today's cache, fallback to any recent cache
+          gh release download "$TAG" --pattern "nvd-database.tar.gz" -O /tmp/nvd.tar.gz 2>/dev/null || \
+          gh release download -p "nvd-database.tar.gz" -O /tmp/nvd.tar.gz --repo "${{ github.repository }}" 2>/dev/null || \
+          echo "No cached NVD database found, will download fresh"
+
+          if [ -f /tmp/nvd.tar.gz ]; then
+            tar xzf /tmp/nvd.tar.gz -C ~/.dependency-check/data
+            echo "✅ Restored NVD database from cache"
+          fi
+
       - name: Download OWASP Dependency-Check (latest)
         run: |
           LATEST_VERSION=$(curl -s https://api.github.com/repos/jeremylong/DependencyCheck/releases/latest | jq -r '.tag_name' | sed 's/^v//')
@@ -69,18 +88,21 @@ jobs:
           unzip -q dependency-check-${LATEST_VERSION}-release.zip
           rm dependency-check-${LATEST_VERSION}-release.zip
 
-      - name: Download NVD Database artifact (if available)
-        continue-on-error: true
-        uses: actions/download-artifact@v4
-        with:
-          name: nvd-database
-          path: ~/.dependency-check/data
-
       - name: Run Dependency-Check on fork
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
           mkdir -p ~/.dependency-check/data
+
+          # Use --noupdate if cache exists, otherwise update
+          NOUPDATE_FLAG=""
+          if [ -d ~/.dependency-check/data ] && [ "$(ls -A ~/.dependency-check/data)" ]; then
+            NOUPDATE_FLAG="--noupdate"
+            echo "Using cached NVD database"
+          else
+            echo "Downloading fresh NVD database"
+          fi
+
           ./dependency-check/bin/dependency-check.sh \
             --project "verademo-java-fork" \
             --scan fork/app \
@@ -88,9 +110,10 @@ jobs:
             --out fork-report \
             --format JSON \
             --failOnCVSS 7 \
-            --nvdApiKey "$NVD_API_KEY" \
+            --data ~/.dependency-check/data \
             --disableOssIndex \
-            --data ~/.dependency-check/data || true
+            $NOUPDATE_FLAG \
+            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} || true
 
       - name: Upload dependency-check report
         if: always()
@@ -98,14 +121,6 @@ jobs:
         with:
           name: dependency-check-report
           path: fork-report/dependency-check-report.json
-          retention-days: 30
-
-      - name: Upload NVD Database for caching
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: nvd-database
-          path: ~/.dependency-check/data
           retention-days: 30
 
       - name: Parse current vulnerabilities
