@@ -69,13 +69,12 @@ jobs:
           unzip -q dependency-check-${LATEST_VERSION}-release.zip
           rm dependency-check-${LATEST_VERSION}-release.zip
 
-      - name: Cache NVD Database
-        uses: actions/cache@v4
+      - name: Download NVD Database artifact (if available)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
         with:
+          name: nvd-database
           path: ~/.dependency-check/data
-          key: nvd-data-${{ runner.os }}-latest
-          restore-keys: |
-            nvd-data-${{ runner.os }}-
 
       - name: Run Dependency-Check on fork
         env:
@@ -99,6 +98,14 @@ jobs:
         with:
           name: dependency-check-report
           path: fork-report/dependency-check-report.json
+          retention-days: 30
+
+      - name: Upload NVD Database for caching
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nvd-database
+          path: ~/.dependency-check/data
           retention-days: 30
 
       - name: Parse current vulnerabilities
