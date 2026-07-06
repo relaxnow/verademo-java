@@ -92,6 +92,10 @@ jobs:
         env:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         run: |
+          if [ ! -f fork/app/pom.xml ]; then
+            echo "❌ pom.xml not found in fork/app"
+            exit 1
+          fi
           mkdir -p ~/.dependency-check/data
 
           # Use --noupdate if cache exists, otherwise update
