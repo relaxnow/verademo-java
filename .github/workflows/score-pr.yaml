@@ -3,14 +3,13 @@ name: Score PR - Java
 # ⚠️  SECURITY WARNING: This workflow uses pull_request_target
 # This runs with access to LEADERBOARD_TOKEN secret in the original repo's context.
 # This is safe ONLY because:
-# 1. We do NOT install fork dependencies (npm install, pip install, etc.)
-# 2. We do NOT execute fork code (scripts, setup.py, build files)
-# 3. We only run static analysis tools on manifests (npm audit, pip-audit, dependency-check)
-# 4. We only read fork files, never execute them
+# 1. We do NOT execute fork code (Maven plugins, etc.)
+# 2. We only run static analysis tools on resolved dependencies
+# 3. We only read fork files, never execute them
 #
 # DO NOT change this workflow to:
-# - Run npm install / pip install / mvn build from the fork
-# - Execute scripts from the fork
+# - Run mvn clean install from the fork
+# - Execute Maven plugins from the fork
 # - Run arbitrary commands with fork inputs
 # This would allow malicious PRs to steal LEADERBOARD_TOKEN.
 
@@ -36,11 +35,11 @@ jobs:
         with:
           path: original
 
-      - name: Parse baseline from SCAN-RESULTS.md
+      - name: Parse baseline from osv-scanner-baseline.json
         id: baseline
         run: |
           cd original
-          baseline=$(python3 scripts/parse-baseline.py SCAN-RESULTS.md)
+          baseline=$(python3 scripts/parse-baseline.py osv-scanner-baseline.json)
           echo "count=$baseline" >> $GITHUB_OUTPUT
           echo "📊 Baseline: $baseline vulnerabilities"
 
@@ -57,128 +56,42 @@ jobs:
           java-version: '11'
           distribution: 'temurin'
 
-      - name: Resolve Maven dependencies
-        run: |
-          mvn -f fork/app/pom.xml dependency:resolve -DskipTests -q -DdisableTransferProgress=true || true
-
-      - name: Download cached NVD Database from Release
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          mkdir -p ~/.dependency-check/data
-          DATE=$(date -u +'%Y-%m-%d')
-          TAG="nvd-cache-${DATE}"
-
-          # Try to download today's cache, fallback to any recent cache
-          gh release download "$TAG" --pattern "nvd-database.tar.gz" -O /tmp/nvd.tar.gz 2>/dev/null || \
-          gh release download -p "nvd-database.tar.gz" -O /tmp/nvd.tar.gz --repo "${{ github.repository }}" 2>/dev/null || \
-          echo "No cached NVD database found, will download fresh"
-
-          if [ -f /tmp/nvd.tar.gz ]; then
-            tar xzf /tmp/nvd.tar.gz -C ~/.dependency-check
-            echo "✅ Restored NVD database from cache"
-          fi
-
-      - name: Download OWASP Dependency-Check (latest)
-        run: |
-          LATEST_VERSION=$(curl -s https://api.github.com/repos/jeremylong/DependencyCheck/releases/latest | jq -r '.tag_name' | sed 's/^v//')
-          echo "Downloading Dependency-Check v${LATEST_VERSION}"
-          wget -q https://github.com/jeremylong/DependencyCheck/releases/download/v${LATEST_VERSION}/dependency-check-${LATEST_VERSION}-release.zip
-          unzip -q dependency-check-${LATEST_VERSION}-release.zip
-          rm dependency-check-${LATEST_VERSION}-release.zip
-
-      - name: Run Dependency-Check on fork
-        env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+      - name: Validate pom.xml exists
         run: |
           if [ ! -f fork/app/pom.xml ]; then
             echo "❌ pom.xml not found in fork/app"
             exit 1
           fi
-          mkdir -p ~/.dependency-check/data
 
-          # Use --noupdate if cache exists, otherwise update
-          NOUPDATE_FLAG=""
-          if [ -d ~/.dependency-check/data ] && [ "$(ls -A ~/.dependency-check/data)" ]; then
-            NOUPDATE_FLAG="--noupdate"
-            echo "Using cached NVD database"
-          else
-            echo "Downloading fresh NVD database"
-          fi
+      - name: Install osv-scanner
+        run: |
+          mkdir -p /tmp/osv-bin
+          curl -sL https://github.com/google/osv-scanner/releases/download/v2.4.0/osv-scanner_linux_amd64 -o /tmp/osv-bin/osv-scanner
+          chmod +x /tmp/osv-bin/osv-scanner
+          echo "/tmp/osv-bin" >> $GITHUB_PATH
 
-          ./dependency-check/bin/dependency-check.sh \
-            --project "verademo-java-fork" \
-            --scan fork/app \
-            --scan ~/.m2/repository \
-            --out fork-report \
-            --format JSON \
-            --failOnCVSS 7 \
-            --data ~/.dependency-check/data \
-            --disableOssIndex \
-            $NOUPDATE_FLAG \
-            ${NVD_API_KEY:+--nvdApiKey "$NVD_API_KEY"} || true
+      - name: Verify osv-scanner installation
+        run: |
+          osv-scanner --version
+          which osv-scanner
+          echo "✅ osv-scanner is available in PATH"
 
-      - name: Upload dependency-check report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: dependency-check-report
-          path: fork-report/dependency-check-report.json
-          retention-days: 30
+      - name: Resolve Maven dependencies
+        run: |
+          mvn -f fork/app/pom.xml dependency:resolve -DskipTests -q -DdisableTransferProgress=true || true
+
+      - name: Run osv-scanner on fork
+        run: |
+          cd fork/app
+          echo "📦 Scanning fork/app..."
+          osv-scanner scan -r -f json --output-file audit-report.json . 2>&1
 
       - name: Parse current vulnerabilities
         id: current
         run: |
-          python3 << 'EOF'
-          import json
-
-          try:
-              with open('fork-report/dependency-check-report.json', 'r') as f:
-                  report = json.load(f)
-          except Exception as e:
-              print(f"Error reading report: {e}")
-              import os
-              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                  f.write("count=0\n")
-              exit()
-
-          # Handle different dependency-check JSON structures
-          if isinstance(report, dict):
-              # Try reportSchema first
-              if 'reportSchema' in report and isinstance(report['reportSchema'], dict):
-                  dependencies = report['reportSchema'].get('dependencies', [])
-              # If not, try top-level dependencies
-              elif 'dependencies' in report:
-                  dependencies = report['dependencies']
-              else:
-                  print(f"Debug: report keys = {list(report.keys())}")
-                  dependencies = []
-          else:
-              print(f"Error: report is not a dict, it's {type(report)}")
-              dependencies = []
-
-          count = 0
-
-          for dep in dependencies:
-              if not isinstance(dep, dict):
-                  continue
-              vulns = dep.get('vulnerabilities', [])
-              for vuln in vulns:
-                  if not isinstance(vuln, dict):
-                      continue
-                  # Count vulnerabilities with CVSS v3 score >= 7.0
-                  cvssv3 = vuln.get('cvssv3', {})
-                  if isinstance(cvssv3, dict):
-                      score = cvssv3.get('baseScore')
-                      if score is not None and float(score) >= 7.0:
-                          count += 1
-
-          import os
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f"count={count}\n")
-          print(f"Current: {count} vulnerabilities (CVSS >= 7.0)")
-          EOF
+          count=$(cd original && python3 scripts/parse-current.py ../fork/app/audit-report.json)
+          echo "count=$count" >> $GITHUB_OUTPUT
+          echo "Current: $count vulnerabilities (CRITICAL + HIGH)"
 
       - name: Calculate score
         id: score
@@ -223,33 +136,16 @@ jobs:
             --github-token "$LEADERBOARD_TOKEN"
 
       - name: Comment on PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const baseline = ${{ steps.baseline.outputs.count }};
-            const current = ${{ steps.current.outputs.count }};
-            const score = ${{ steps.score.outputs.score }};
-            const timestamp = "${{ steps.timestamp.outputs.ts }}";
-
-            let status = '❌';
-            if (current === 0) status = '✅';
-            else if (score > 0) status = '🟡';
-
-            let body = status + ' **Scoring Update**\n\n';
-            body += '| Metric | Value |\n';
-            body += '|--------|-------|\n';
-            body += '| Baseline | ' + baseline + ' vulnerabilities |\n';
-            body += '| Current | ' + current + ' vulnerabilities |\n';
-            body += '| Fixed | ' + score + ' vulnerabilities |\n';
-            body += '| Timestamp | ' + timestamp + ' |\n\n';
-            body += 'Run `mvn dependency-check:check -DfailBuildOnCVSS=7` locally to see details.';
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd original
+          python3 scripts/post-pr-comment.py \
+            --baseline ${{ steps.baseline.outputs.count }} \
+            --current ${{ steps.current.outputs.count }} \
+            --score ${{ steps.score.outputs.score }} \
+            --timestamp "${{ steps.timestamp.outputs.ts }}" \
+            --scanner pom.xml
 
       - name: Fail check if vulnerabilities remain
         if: ${{ steps.current.outputs.count > 0 }}
