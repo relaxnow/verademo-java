@@ -50,12 +50,22 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           path: fork
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '11'
+          distribution: 'temurin'
+
       - name: Validate pom.xml exists
         run: |
           if [ ! -f fork/app/pom.xml ]; then
             echo "❌ pom.xml not found in fork/app"
             exit 1
           fi
+
+      - name: Cache Maven POMs for osv-scanner
+        run: |
+          mvn -f fork/app/pom.xml dependency:go-offline -q -DdisableTransferProgress=true || true
 
       - name: Install osv-scanner
         run: |
