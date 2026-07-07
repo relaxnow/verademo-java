@@ -50,12 +50,6 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           path: fork
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: '11'
-          distribution: 'temurin'
-
       - name: Validate pom.xml exists
         run: |
           if [ ! -f fork/app/pom.xml ]; then
@@ -75,10 +69,6 @@ jobs:
           osv-scanner --version
           which osv-scanner
           echo "✅ osv-scanner is available in PATH"
-
-      - name: Resolve Maven dependencies
-        run: |
-          mvn -f fork/app/pom.xml dependency:resolve -DskipTests -q -DdisableTransferProgress=true || true
 
       - name: Run osv-scanner on fork
         run: |
@@ -145,7 +135,6 @@ jobs:
             --current ${{ steps.current.outputs.count }} \
             --score ${{ steps.score.outputs.score }} \
             --timestamp "${{ steps.timestamp.outputs.ts }}" \
-            --scanner pom.xml \
             --pr-number ${{ github.event.pull_request.number }}
 
       - name: Fail check if vulnerabilities remain
